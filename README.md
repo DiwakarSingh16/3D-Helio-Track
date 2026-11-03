@@ -22,13 +22,13 @@ The model follows the daylight cycle as the sun moves. Drag to orbit the camera,
 
 ## Run locally
 
-No build step is required. Serve the project from its root directory:
+No build step is required. Open a terminal in the **3D-Helio-Track** project folder (the folder containing `index.html`) and run:
 
 ```bash
-python -m http.server 4173
+python -m http.server 4174
 ```
 
-Open [http://localhost:4173](http://localhost:4173) in a modern browser. Three.js and the display fonts load from CDNs, so an internet connection is needed for the 3D scene and fonts.
+Open [http://localhost:4174](http://localhost:4174) in a modern browser. Three.js and the display fonts load from CDNs, so an internet connection is needed for the 3D scene and fonts.
 
 ## Connect your tracker
 
@@ -71,3 +71,4 @@ docs/
 ## License
 
 No license file is included yet. Contact the repository owner before redistributing or reusing this project.
+
