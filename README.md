@@ -22,13 +22,15 @@ The model follows the daylight cycle as the sun moves. Drag to orbit the camera,
 
 ## Run locally
 
-No build step is required. Open a terminal in the **3D-Helio-Track** project folder (the folder containing `index.html`) and run:
+No build step is required. On Windows, double-click `run.bat` in this folder. It starts the server from the correct project directory on port **4174** and opens the dashboard. Keep the terminal window open while using the app.
+
+Alternatively, open a terminal in the **3D-Helio-Track** project folder (the folder containing `index.html`) and run:
 
 ```bash
 python -m http.server 4174
 ```
 
-Open [http://localhost:4174](http://localhost:4174) in a modern browser. Three.js and the display fonts load from CDNs, so an internet connection is needed for the 3D scene and fonts.
+Then open [http://localhost:4174](http://localhost:4174) in a modern browser. Three.js and the display fonts load from CDNs, so an internet connection is needed for the 3D scene and fonts.
 
 ## Connect your tracker
 
@@ -52,6 +54,7 @@ ThingSpeak read keys are stored in this browser's local storage. Use a read-only
 ## Project files
 
 ```text
+run.bat      Windows launcher for port 4174
 index.html   Dashboard layout and connection dialog
 styles.css   Responsive visual design
 app.js       Three.js scene, sensor connections, gauges, and charts
