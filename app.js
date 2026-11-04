@@ -28,7 +28,8 @@ const demoReadings = {field1:1650,field2:2380,field3:95,field4:31.2,field5:.12,f
 const state = {
   config: readConfig(), source:localStorage.getItem('helio-source')||(readConfig().channelId?'thingspeak':'demo'), raw:{}, values:{}, connected:false, demo:false, tracking:true,
   labels:true, tilt:0, timer:null, lastUpdated:null, selected:'array',
-  history:[],historyChannel:'',pollBusy:false,sunHour:9,sunPlaying:true,sunTarget:0,sunDirection:null,lastDemoStore:0,bluetoothDevice:null,lastWirelessSample:0
+  history:[],historyChannel:'',pollBusy:false,sunHour:9,sunPlaying:true,sunTarget:0,sunDirection:null,lastDemoStore:0,bluetoothDevice:null,lastWirelessSample:0,
+  serialPort:null,serialReader:null,serialRunning:false,serialLineBuffer:'',serialSample:null
 };
 
 function readConfig(){try{return JSON.parse(localStorage.getItem('helio-config')||'{}')}catch{return {}}}
@@ -173,6 +174,67 @@ async function pollWifi(){
   try{const response=await fetch(endpoint,{cache:'no-store'});if(!response.ok)throw new Error(`HTTP ${response.status}`);const payload=await response.json();state.connected=true;state.demo=false;$('#historyMode').style.display='none';applyWirelessPayload(payload,`wifi-${endpoint}`,'ESP32 Wi-Fi');}
   catch(error){state.connected=false;setConnection('WIFI LINK INTERRUPTED',false);$('#feedLabel').textContent='Could not read ESP32';toast(`ESP32 Wi-Fi: ${error.message}`)}
 }
+async function stopSerial(){
+  state.serialRunning=false;
+  const reader=state.serialReader,port=state.serialPort;
+  state.serialReader=null;state.serialPort=null;state.serialLineBuffer='';state.serialSample=null;
+  if(reader){try{await reader.cancel()}catch{}try{reader.releaseLock()}catch{}}
+  if(port){try{await port.close()}catch{}}
+}
+function consumeSerialLine(line,sourceKey){
+  const text=line.trim();if(!text)return;
+  if(text.startsWith('{')){
+    try{const payload=JSON.parse(text);if(Object.keys(mapSensorPayload(payload)).length)applyWirelessPayload(payload,sourceKey,'ESP32 USB SERIAL');return}catch{}
+  }
+  const sample=state.serialSample||(state.serialSample={});let match;
+  if((match=text.match(/^LDR\s*1:\s*Light ADC\s*=\s*(\d+)/i)))sample.field1=Number(match[1]);
+  else if((match=text.match(/^LDR\s*2:\s*Light ADC\s*=\s*(\d+)/i)))sample.field2=Number(match[1]);
+  else if((match=text.match(/^Servo Motor:.*?Current angle\s*=\s*(-?\d+(?:\.\d+)?)/i)))sample.field3=Number(match[1]);
+  else if((match=text.match(/^Acceleration\s*\(m\/s\^2\):\s*X\s*=\s*(-?\d+(?:\.\d+)?),\s*Y\s*=\s*(-?\d+(?:\.\d+)?),\s*Z\s*=\s*(-?\d+(?:\.\d+)?)/i))){
+    const [x,y,z]=match.slice(1).map(Number);sample.field8=Math.sqrt(x*x+y*y+z*z);
+  }
+  else if((match=text.match(/^Gyroscope\s*\(rad\/s\):\s*X\s*=\s*(-?\d+(?:\.\d+)?),\s*Y\s*=\s*(-?\d+(?:\.\d+)?),\s*Z\s*=\s*(-?\d+(?:\.\d+)?)/i))){
+    sample.field5=Number(match[1]);sample.field6=Number(match[2]);sample.field7=Number(match[3]);
+  }
+  else if((match=text.match(/^Thermistor:.*?Temperature\s*=\s*(-?\d+(?:\.\d+)?)\s*C/i)))sample.field4=Number(match[1]);
+  if(/^WiFi:/i.test(text)){
+    if(Object.keys(sample).length)applyWirelessPayload(sample,sourceKey,'ESP32 USB SERIAL');
+    state.serialSample={};
+  }
+}
+async function connectSerial(){
+  if(!('serial' in navigator)){toast('USB serial needs Chrome or Edge. Open this app at localhost and try again.');return}
+  try{
+    // requestPort must run directly from the Connect button so the browser can show its COM port picker.
+    const port=await navigator.serial.requestPort();
+    await stopSerial();
+    const baudRate=Number($('#serialBaudInput').value)||115200;
+    await port.open({baudRate});
+    const info=port.getInfo(),sourceKey=`usb-${info.usbVendorId||'esp'}-${info.usbProductId||'serial'}`;
+    state.serialPort=port;state.serialRunning=true;state.source='serial';state.demo=false;state.connected=true;
+    state.raw={};state.values={};fields.forEach((field,index)=>{$(`#value${index}`).textContent='—';$(`#arc${index}`).style.strokeDasharray='0 100'});
+    state.historyChannel=sourceKey;state.history=loadHistory(sourceKey);state.serialSample={};$('#historyMode').style.display='none';drawHistory();
+    $('#sceneMode').textContent='USB SERIAL · LIVE';$('#feedLabel').textContent=`Waiting for ESP32 · ${baudRate} baud`;$('#feedAge').textContent='WAITING';
+    setConnection('USB SERIAL · LIVE',true);
+    port.addEventListener('disconnect',()=>{
+      if(state.serialPort!==port)return;state.serialRunning=false;state.connected=false;state.serialPort=null;state.serialReader?.cancel().catch(()=>{});
+      setConnection('USB SERIAL DISCONNECTED',false);$('#feedLabel').textContent='ESP32 USB cable disconnected';
+    },{once:true});
+    const reader=port.readable.getReader();state.serialReader=reader;const decoder=new TextDecoder();
+    while(state.serialRunning&&state.serialPort===port){
+      const {value,done}=await reader.read();if(done)break;
+      state.serialLineBuffer+=decoder.decode(value,{stream:true});const lines=state.serialLineBuffer.split(/\r?\n/);state.serialLineBuffer=lines.pop()||'';
+      for(const line of lines)consumeSerialLine(line,sourceKey);
+      if(state.serialLineBuffer.length>4096)state.serialLineBuffer=state.serialLineBuffer.slice(-1024);
+    }
+  }catch(error){
+    if(error.name!=='NotFoundError')toast(`USB serial: ${error.message}`);
+    if(state.serialPort){state.connected=false;setConnection('USB SERIAL DISCONNECTED',false);$('#feedLabel').textContent='USB serial disconnected';await stopSerial()}
+  }finally{
+    if(state.serialReader){try{state.serialReader.releaseLock()}catch{}state.serialReader=null}
+    if(state.serialPort&& !state.serialRunning){const port=state.serialPort;state.serialPort=null;try{await port.close()}catch{}}
+  }
+}
 async function connectBluetooth(){
   if(!navigator.bluetooth){toast('Web Bluetooth is not supported in this browser.');return}
   const config=readConfig(),serviceUuid=(config.serviceUuid||'').trim(),charUuid=(config.charUuid||'').trim();if(!serviceUuid||!charUuid){toast('Enter the ESP32 service and characteristic UUIDs first.');return}
@@ -195,7 +257,7 @@ function connectThingSpeak(){
   pollChannel(state.history.length===0);state.timer=setInterval(()=>pollChannel(false),15000);
 }
 function startSource(source,fromUser=false){
-  clearInterval(state.timer);if(state.bluetoothDevice?.gatt?.connected)state.bluetoothDevice.gatt.disconnect();state.bluetoothDevice=null;state.source=source;state.demo=false;state.connected=false;state.raw={};state.values={};
+  clearInterval(state.timer);if(state.bluetoothDevice?.gatt?.connected)state.bluetoothDevice.gatt.disconnect();state.bluetoothDevice=null;if(state.serialPort)stopSerial();state.source=source;state.demo=false;state.connected=false;state.raw={};state.values={};
   localStorage.setItem('helio-source',source);
   if(source==='demo'){startDemo();return}
   if(source==='thingspeak'){connectThingSpeak();return}
@@ -206,6 +268,10 @@ function startSource(source,fromUser=false){
   if(source==='bluetooth'){
     if(!fromUser){setConnection('BLUETOOTH READY TO PAIR',false);$('#feedLabel').textContent='Choose Bluetooth and pair this device';return}
     connectBluetooth();return;
+  }
+  if(source==='serial'){
+    if(!fromUser){setConnection('USB SERIAL READY TO CONNECT',false);$('#feedLabel').textContent='Choose USB serial and select the ESP32 port';return}
+    connectSerial();return;
   }
 }
 
@@ -357,7 +423,7 @@ $('#historyCanvas').addEventListener('mousemove',event=>{
 });$('#historyCanvas').addEventListener('mouseleave',()=>$('#historyTooltip').style.display='none');
 function showConnectionFields(){
   const source=$('#sourceSelect').value;
-  for(const [name,id] of [['thingspeak','thingSpeakFields'],['wifi','wifiFields'],['bluetooth','bluetoothFields'],['demo','demoFields']])$(`#${id}`).classList.toggle('hidden',source!==name);
+  for(const [name,id] of [['thingspeak','thingSpeakFields'],['wifi','wifiFields'],['serial','serialFields'],['bluetooth','bluetoothFields'],['demo','demoFields']])$(`#${id}`).classList.toggle('hidden',source!==name);
   $('#saveConnection').textContent=source==='demo'?'START SIMULATION':'SAVE & CONNECT';
 }
 $('#sourceSelect').addEventListener('change',showConnectionFields);
@@ -365,6 +431,7 @@ $('#settingsButton').addEventListener('click',()=>{
   state.config=readConfig();$('#sourceSelect').value=state.source;
   $('#channelInput').value=state.config.channelId||'';$('#keyInput').value=state.config.readKey||'';
   $('#wifiUrlInput').value=state.config.wifiUrl||'';$('#wifiPollInput').value=state.config.pollMs||3000;
+  $('#serialBaudInput').value=state.config.serialBaud||115200;
   $('#serviceInput').value=state.config.serviceUuid||'';$('#characteristicInput').value=state.config.charUuid||'';
   showConnectionFields();$('#connectionDialog').showModal();
 });
@@ -373,6 +440,7 @@ $('#saveConnection').addEventListener('click',()=>{
   const source=$('#sourceSelect').value,config={...readConfig()};
   if(source==='thingspeak'){config.channelId=$('#channelInput').value.trim();config.readKey=$('#keyInput').value.trim();if(!config.channelId){toast('Enter your ThingSpeak channel ID');$('#channelInput').focus();return}}
   if(source==='wifi'){config.wifiUrl=$('#wifiUrlInput').value.trim();config.pollMs=Math.max(1000,Number($('#wifiPollInput').value)||3000);if(!config.wifiUrl){toast('Enter your ESP32 JSON endpoint');$('#wifiUrlInput').focus();return}}
+  if(source==='serial'){config.serialBaud=Number($('#serialBaudInput').value)||115200;if(!('serial' in navigator)){toast('USB serial needs Chrome or Edge. Open this app at localhost and try again.');return}}
   if(source==='bluetooth'){config.serviceUuid=$('#serviceInput').value.trim();config.charUuid=$('#characteristicInput').value.trim();if(!config.serviceUuid||!config.charUuid){toast('Enter the BLE service and characteristic UUIDs');return}}
   state.config=config;localStorage.setItem('helio-config',JSON.stringify(config));$('#connectionDialog').close();startSource(source,true);
 });

@@ -17,7 +17,7 @@ The model follows the daylight cycle as the sun moves. Drag to orbit the camera,
 - Eight speedometer gauges for LDR 1, LDR 2, servo angle, panel temperature, gyroscope X/Y/Z, and acceleration magnitude.
 - Telemetry history with field trends, LDR comparison, and gyroscope charts.
 - Demo readings available on launch, so the dashboard and charts are ready to explore without hardware.
-- ThingSpeak channel, ESP32 Wi-Fi JSON endpoint, and Bluetooth LE data source options.
+- Live ESP32 USB serial input with a browser COM port picker, plus ThingSpeak, ESP32 Wi-Fi JSON, and Bluetooth LE sources.
 - Sensor history saved locally in the browser by channel or source.
 
 ## Run locally
@@ -36,6 +36,7 @@ Then open [http://localhost:4174](http://localhost:4174) in a modern browser. Th
 
 Choose **Connect data source** and select a source:
 
+- **ESP32 USB serial:** Choose **ESP32 USB serial · COM port**, leave the baud rate at **115200** to match the sketch, click **Save & Connect**, then select the ESP32 port (for example, COM7) in Chrome or Edge. The dashboard reads the sketch's labeled serial output and updates the gauges and local history as each sensor block arrives. Close Arduino Serial Monitor before connecting because it holds the COM port.
 - **ThingSpeak:** Enter your channel ID and, for a private channel, its read-only API key. Configure the ThingSpeak field names to match the eight readings listed above. The browser fetches the latest feed and channel history.
 - **ESP32 Wi-Fi:** Enter an HTTP endpoint that returns JSON fields such as `field1` through `field8`, or the supported sensor names. The endpoint must allow CORS. A secure hosted page may be blocked from reading a local, non-HTTPS endpoint by the browser.
 - **Bluetooth LE:** Enter the ESP32 service and characteristic UUIDs, then pair from Chrome or Edge on a supported device. The characteristic should provide JSON telemetry.
