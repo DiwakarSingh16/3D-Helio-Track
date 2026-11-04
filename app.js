@@ -184,7 +184,11 @@ function consumeSerialLine(line,sourceKey){
   const sample=state.serialSample||(state.serialSample={});let match;
   if((match=text.match(/^LDR\s*1:\s*Light ADC\s*=\s*(\d+)/i)))sample.field1=Number(match[1]);
   else if((match=text.match(/^LDR\s*2:\s*Light ADC\s*=\s*(\d+)/i)))sample.field2=Number(match[1]);
-  else if((match=text.match(/^Servo Motor:.*?Current angle\s*=\s*(-?\d+(?:\.\d+)?)/i)))sample.field3=Number(match[1]);
+  else if((match=text.match(/^Servo Motor:.*?Current angle\s*=\s*(-?\d+(?:\.\d+)?)/i))){
+    sample.field3=Number(match[1]);
+    // Drive the 3D target as soon as the servo line arrives; the remaining sensor lines follow.
+    updateGauges({field3:sample.field3});
+  }
   else if((match=text.match(/^Acceleration\s*\(m\/s\^2\):\s*X\s*=\s*(-?\d+(?:\.\d+)?),\s*Y\s*=\s*(-?\d+(?:\.\d+)?),\s*Z\s*=\s*(-?\d+(?:\.\d+)?)/i))){
     const [x,y,z]=match.slice(1).map(Number);sample.field8=Math.sqrt(x*x+y*y+z*z);
   }
@@ -388,7 +392,7 @@ const sunRayGeometry=new THREE.BufferGeometry().setFromPoints([new THREE.Vector3
 const northMark=new THREE.Mesh(new THREE.ConeGeometry(.075,.3,12),new THREE.MeshBasicMaterial({color:'#61d4c7'}));northMark.position.set(-3.7,.22,-2.6);northMark.rotation.x=-Math.PI/2;world.add(northMark);
 
 function updateTilt(){
-  tiltAssembly.rotation.x=THREE.MathUtils.degToRad(-state.tilt);$('#tiltValue').textContent=`${state.tilt.toFixed(0)}°`;$('#angleReadout').innerHTML=`${state.tilt.toFixed(1)}<small>°</small>`;$('#normalReadout').textContent=`${(90-state.tilt).toFixed(0)}°`;$('#driveAngle').textContent=`${state.tilt.toFixed(0)}°`;updateIncidence();
+  $('#tiltValue').textContent=`${state.tilt.toFixed(0)}°`;$('#angleReadout').innerHTML=`${state.tilt.toFixed(1)}<small>°</small>`;$('#normalReadout').textContent=`${(90-state.tilt).toFixed(0)}°`;$('#driveAngle').textContent=`${state.tilt.toFixed(0)}°`;
 }
 function updateIncidence(){
   if(!state.sunDirection)return;const normal=new THREE.Vector3(0,1,0).applyEuler(tiltAssembly.rotation).normalize();
@@ -414,8 +418,14 @@ function updateSceneReadouts(){
 }
 function resize(){const w=sceneHost.clientWidth,h=sceneHost.clientHeight;if(!w||!h)return;camera.aspect=w/h;camera.updateProjectionMatrix();renderer.setSize(w,h,false);labelRenderer.setSize(w,h)}
 new ResizeObserver(resize).observe(sceneHost);resize();updateSun();updateTilt();
-let lastFrame=0;
-function animate(time){requestAnimationFrame(animate);const elapsed=lastFrame?time-lastFrame:0;if(elapsed>260){lastFrame=time;if(state.sunPlaying){state.sunHour+=elapsed*12/240000;if(state.sunHour>18)state.sunHour=6+(state.sunHour-18)}updateSun()}
+let lastSunFrame=0,lastRenderFrame=0;
+function animate(time){
+  requestAnimationFrame(animate);
+  const delta=lastRenderFrame?Math.min((time-lastRenderFrame)/1000,.05):1/60;lastRenderFrame=time;
+  if(!lastSunFrame)lastSunFrame=time;
+  if(time-lastSunFrame>=100){const elapsed=time-lastSunFrame;lastSunFrame=time;if(state.sunPlaying){state.sunHour+=elapsed*12/240000;if(state.sunHour>18)state.sunHour=6+(state.sunHour-18)}updateSun()}
+  const targetRotation=THREE.MathUtils.degToRad(-state.tilt),response=1-Math.exp(-18*delta);
+  tiltAssembly.rotation.x+=(targetRotation-tiltAssembly.rotation.x)*response;updateIncidence();
   controls.update();renderer.render(scene,camera);labelRenderer.render(scene,camera);
 }requestAnimationFrame(animate);
 
