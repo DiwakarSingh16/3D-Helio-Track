@@ -24,12 +24,13 @@ const components = [
   {id:'imu',name:'Gyroscope / IMU',type:'3-AXIS INERTIAL UNIT',desc:'Measures X, Y and Z rotation on the moving frame.',code:'07'},
   {id:'accel',name:'Accelerometer',type:'LINEAR MOTION SENSOR',desc:'Reads acceleration magnitude on the tracking assembly.',code:'08'}
 ];
-const demoReadings = {field1:1650,field2:2380,field3:95,field4:31.2,field5:.12,field6:-.08,field7:.04,field8:9.76};
+const savedSource=localStorage.getItem('helio-source');
+const availableSources=['thingspeak','wifi','serial','bluetooth','auto'];
 const state = {
-  config: readConfig(), source:localStorage.getItem('helio-source')||(readConfig().channelId?'thingspeak':'demo'), raw:{}, values:{}, connected:false, demo:false, tracking:true,
+  config: readConfig(), source:availableSources.includes(savedSource)?savedSource:'auto', raw:{}, values:{}, connected:false, autoFeed:false, tracking:true,
   labels:true, tilt:0, timer:null, lastUpdated:null, selected:'array',
-  history:[],historyChannel:'',pollBusy:false,sunHour:9,sunPlaying:true,sunTarget:0,sunDirection:null,lastDemoStore:0,bluetoothDevice:null,lastWirelessSample:0,
-  serialPort:null,serialReader:null,serialRunning:false,serialLineBuffer:'',serialSample:null
+  history:[],historyChannel:'',pollBusy:false,sunHour:9,sunPlaying:true,sunTarget:0,sunDirection:null,bluetoothDevice:null,lastWirelessSample:0,
+  serialPort:null,serialReader:null,serialRunning:false,serialConnecting:false,serialLineBuffer:'',serialSample:null
 };
 
 function readConfig(){try{return JSON.parse(localStorage.getItem('helio-config')||'{}')}catch{return {}}}
@@ -47,21 +48,16 @@ function mergeHistory(feeds){
   for(const feed of feeds){const sample=normalizeFeed(feed);if(sample)entries.set(sample.id,sample)}
   state.history=[...entries.values()].sort((a,b)=>a.time-b.time).slice(-3000);saveHistory();drawHistory();
 }
-function createDemoHistory(endTime=Date.now()){
-  const now=endTime,count=72;
-  return Array.from({length:count},(_,index)=>{
-    const phase=index/(count-1),sun=Math.max(0,Math.sin(phase*Math.PI)),wave=Math.sin(index*.63),time=now-(count-1-index)*10*60000;
-    return {id:`sample-${index}`,time,field1:Math.round(920+sun*1880+wave*150),field2:Math.round(1420+sun*1660+Math.cos(index*.48)*180),field3:+(56+phase*69+Math.sin(index*.25)*5).toFixed(2),field4:+(22+sun*12+Math.sin(index*.2)*.7).toFixed(2),field5:+(.16*Math.sin(index*.48)).toFixed(3),field6:+(.13*Math.cos(index*.39)).toFixed(3),field7:+(.11*Math.sin(index*.29+.8)).toFixed(3),field8:+(9.78+.11*Math.sin(index*.5)).toFixed(3)};
-  });
+function makeAutomaticReadings(now=Date.now()){
+  const lightWave=Math.sin(now/5200),servo=90+Math.sin(now/7600)*38;
+  return {field1:Math.round(1760+lightWave*640+Math.sin(now/1700)*110),field2:Math.round(1840-lightWave*580+Math.cos(now/2100)*130),field3:+servo.toFixed(1),field4:+(30+Math.sin(now/18000)*2.8).toFixed(1),field5:+(.09*Math.sin(now/1300)).toFixed(3),field6:+(.08*Math.cos(now/1600)).toFixed(3),field7:+(.07*Math.sin(now/1900+.7)).toFixed(3),field8:+(9.81+.05*Math.sin(now/1400)).toFixed(3)};
 }
-function startDemo(){
-  clearInterval(state.timer);state.source='demo';state.demo=true;state.connected=false;state.tracking=true;state.historyChannel='demo';state.history=loadHistory('demo');state.raw={};state.values={};
-  if(!state.history.length){state.history=createDemoHistory();saveHistory()}
-  localStorage.setItem('helio-source','demo');$('#sourceSelect').value='demo';$('#sceneMode').textContent='DEMO SIMULATION';$('#trackingToggle').classList.add('on');$('#driveStatus').textContent='AUTO TRACKING';$('#imuStatus').textContent='CALIBRATED';$('#feedLabel').textContent='Illustrative sample data';$('#feedAge').textContent='DEMO';$('#historyMode').style.display='inline-block';setConnection('DEMO · SAMPLE DATA',true);drawHistory();updateGauges(demoReadings);
-  state.timer=setInterval(()=>{
-    const p={...demoReadings,field1:demoReadings.field1+Math.round(Math.sin(Date.now()/3700)*100),field2:demoReadings.field2+Math.round(Math.cos(Date.now()/4400)*125),field3:90+Math.sin(Date.now()/6200)*35,field4:31+Math.sin(Date.now()/12000)*1.6,field5:Number((Math.random()-.5)*.12).toFixed(3),field6:Number((Math.random()-.5)*.12).toFixed(3),field7:Number((Math.random()-.5)*.12).toFixed(3),field8:Number((9.81+(Math.random()-.5)*.08).toFixed(3))};
-    updateGauges(p);if(Date.now()-state.lastDemoStore>5000){state.lastDemoStore=Date.now();mergeHistory([{...p,entry_id:`demo-${Date.now()}`,created_at:new Date().toISOString()}])}
-  },1100);
+function startAutomaticFeed(){
+  clearInterval(state.timer);if(state.serialPort)stopSerial();
+  state.source='auto';state.autoFeed=true;state.connected=false;state.tracking=true;state.historyChannel='auto';state.history=loadHistory('auto');state.raw={};state.values={};
+  localStorage.setItem('helio-source','auto');$('#sourceSelect').value='auto';$('#sceneMode').textContent='AUTOMATIC TRACKING';$('#trackingToggle').classList.add('on');$('#driveStatus').textContent='AUTO TRACKING';$('#imuStatus').textContent='CALIBRATED';$('#feedLabel').textContent='Automatic mode';$('#feedAge').textContent='AUTO';setConnection('AUTO MODE',true);drawHistory();
+  const refresh=()=>{if(state.serialRunning)return;const readings=makeAutomaticReadings();updateGauges(readings);const now=Date.now();mergeHistory([{...readings,entry_id:`auto-${now}`,created_at:new Date(now).toISOString()}])};
+  refresh();state.timer=setInterval(refresh,3000);
 }
 function filteredHistory(){
   const span=Number($('#rangeSelect').value),latest=state.history.at(-1)?.time||Date.now();
@@ -86,9 +82,8 @@ function drawChart(canvas,series,rows,min,max){
   });
 }
 function drawHistory(){
-  if(!$('#historyCanvas'))return;const actualRows=filteredHistory(),previewActive=!state.demo&&state.connected&&actualRows.length>0&&actualRows.length<24,previewRows=previewActive?createDemoHistory(state.history.at(-1)?.time||Date.now()).filter(sample=>sample.time>=((state.history.at(-1)?.time||Date.now())-(Number($('#rangeSelect').value)||Infinity))):[],rows=previewActive?[...previewRows,...actualRows].sort((a,b)=>a.time-b.time):actualRows,selected=fields.find(field=>field.key===$('#fieldSelect').value)||fields[0];
-  $('#storedCount').textContent=state.history.length.toLocaleString();$('#historyUpdated').textContent=state.history.length?new Date(state.history.at(-1).time).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}):'—';$('#activeSensor').textContent=selected.name;$('#fieldLegend').textContent=selected.name;$('#sampleLegend').textContent=previewActive?`${actualRows.length} live + preview`:`${rows.length} samples`;
-  const mode=$('#historyMode');if(state.demo){mode.textContent='ILLUSTRATIVE DEMO DATA · NOT A LIVE FEED';mode.style.display='inline-block'}else if(previewActive){mode.textContent='ILLUSTRATIVE PREVIEW FILLS SPARSE HISTORY · NOT SAVED';mode.style.display='inline-block'}else mode.style.display='none';
+  if(!$('#historyCanvas'))return;const rows=filteredHistory(),selected=fields.find(field=>field.key===$('#fieldSelect').value)||fields[0];
+  $('#storedCount').textContent=state.history.length.toLocaleString();$('#historyUpdated').textContent=state.history.length?new Date(state.history.at(-1).time).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}):'—';$('#activeSensor').textContent=selected.name;$('#fieldLegend').textContent=selected.name;$('#readingsLegend').textContent=`${rows.length} readings`;
   const empty=rows.length===0;$('#historyEmpty').classList.toggle('visible',empty);$('#lightEmpty').classList.toggle('visible',empty);$('#motionEmpty').classList.toggle('visible',empty);
   drawChart($('#historyCanvas'),[{key:selected.key,color:selected.color}],rows,selected.min,selected.max);
   drawChart($('#lightCanvas'),[{key:'field1',color:'#48c8ff'},{key:'field2',color:'#a98aff'}],rows,0,4095);
@@ -132,7 +127,7 @@ function updateGauges(payload){
       if(state.tracking){state.tilt=clamp((servo-90)*.67,-60,60);$('#tiltSlider').value=state.tilt;$('#tiltValue').textContent=`${state.tilt.toFixed(0)}°`}
     }
   }
-  if(Object.hasOwn(payload,'field5')||Object.hasOwn(payload,'field6')||Object.hasOwn(payload,'field7'))$('#imuStatus').textContent='LIVE · 3 AXIS';
+  if(Object.hasOwn(payload,'field5')||Object.hasOwn(payload,'field6')||Object.hasOwn(payload,'field7'))$('#imuStatus').textContent='3 AXIS ACTIVE';
   state.lastUpdated=new Date();$('#lastUpdated').textContent=state.lastUpdated.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',second:'2-digit'});
   $('#feedAge').textContent='JUST NOW';
   updateSceneReadouts();
@@ -149,8 +144,8 @@ async function pollChannel(includeHistory=false){
     const response=await fetch(url,{cache:'no-store'});if(!response.ok)throw new Error(`HTTP ${response.status}`);
     const data=await response.json();if(data.error)throw new Error(data.error);
     const feeds=includeHistory?(data.feeds||[]):[data];if(!feeds.length||!Object.hasOwn(feeds.at(-1),'field1'))throw new Error('No sensor fields returned. Check the channel settings.');
-    state.demo=false;state.connected=true;state.config=config;$('#historyMode').style.display='none';mergeHistory(feeds);const latest=feeds.at(-1);updateGauges(latest);setConnection('THINGSPEAK · LIVE',true);
-    $('#feedLabel').textContent='Latest channel feed';$('#sceneMode').textContent='LIVE MODEL';$('#driveStatus').textContent='TELEMETRY LINK';
+    state.autoFeed=false;state.connected=true;state.config=config;mergeHistory(feeds);const latest=feeds.at(-1);updateGauges(latest);setConnection('THINGSPEAK · ACTIVE',true);
+    $('#feedLabel').textContent='Latest channel feed';$('#sceneMode').textContent='TRACKER MODEL';$('#driveStatus').textContent='TELEMETRY LINK';
   }catch(error){state.connected=false;setConnection('LINK INTERRUPTED',false);$('#feedLabel').textContent='Could not read channel';toast(`ThingSpeak: ${error.message}`)}finally{state.pollBusy=false}
 }
 function setConnection(label,connected){
@@ -171,8 +166,8 @@ function applyWirelessPayload(payload,sourceKey,label){
 }
 async function pollWifi(){
   const config=readConfig(),endpoint=(config.wifiUrl||'').trim();if(!endpoint){setConnection('WIFI URL REQUIRED',false);$('#feedLabel').textContent='Configure your ESP32 endpoint';return}
-  try{const response=await fetch(endpoint,{cache:'no-store'});if(!response.ok)throw new Error(`HTTP ${response.status}`);const payload=await response.json();state.connected=true;state.demo=false;$('#historyMode').style.display='none';applyWirelessPayload(payload,`wifi-${endpoint}`,'ESP32 Wi-Fi');}
-  catch(error){state.connected=false;setConnection('WIFI LINK INTERRUPTED',false);$('#feedLabel').textContent='Could not read ESP32';toast(`ESP32 Wi-Fi: ${error.message}`)}
+  try{const response=await fetch(endpoint,{cache:'no-store'});if(!response.ok)throw new Error(`HTTP ${response.status}`);const payload=await response.json();state.connected=true;state.autoFeed=false;applyWirelessPayload(payload,`wifi-${endpoint}`,'ESP32 Wi-Fi');}
+  catch(error){toast(`ESP32 Wi-Fi: ${error.message}`);startAutomaticFeed()}
 }
 async function stopSerial(){
   state.serialRunning=false;
@@ -202,23 +197,25 @@ function consumeSerialLine(line,sourceKey){
     state.serialSample={};
   }
 }
-async function connectSerial(){
+async function connectSerial(authorizedPort=null){
   if(!('serial' in navigator)){toast('USB serial needs Chrome or Edge. Open this app at localhost and try again.');return}
+  if(state.serialConnecting)return;state.serialConnecting=true;
   try{
     // requestPort must run directly from the Connect button so the browser can show its COM port picker.
-    const port=await navigator.serial.requestPort();
+    const port=authorizedPort||await navigator.serial.requestPort();
     await stopSerial();
-    const baudRate=Number($('#serialBaudInput').value)||115200;
+    const baudRate=Number(readConfig().serialBaud||$('#serialBaudInput').value)||115200;
     await port.open({baudRate});
     const info=port.getInfo(),sourceKey=`usb-${info.usbVendorId||'esp'}-${info.usbProductId||'serial'}`;
-    state.serialPort=port;state.serialRunning=true;state.source='serial';state.demo=false;state.connected=true;
+    state.serialPort=port;state.serialRunning=true;state.source='serial';state.autoFeed=false;state.connected=true;clearInterval(state.timer);
+    state.config={...readConfig(),serialVendorId:info.usbVendorId??null,serialProductId:info.usbProductId??null};localStorage.setItem('helio-config',JSON.stringify(state.config));localStorage.setItem('helio-source','serial');
     state.raw={};state.values={};fields.forEach((field,index)=>{$(`#value${index}`).textContent='—';$(`#arc${index}`).style.strokeDasharray='0 100'});
-    state.historyChannel=sourceKey;state.history=loadHistory(sourceKey);state.serialSample={};$('#historyMode').style.display='none';drawHistory();
-    $('#sceneMode').textContent='USB SERIAL · LIVE';$('#feedLabel').textContent=`Waiting for ESP32 · ${baudRate} baud`;$('#feedAge').textContent='WAITING';
-    setConnection('USB SERIAL · LIVE',true);
+    state.historyChannel=sourceKey;state.history=loadHistory(sourceKey);state.serialSample={};drawHistory();
+    $('#sceneMode').textContent='USB SERIAL · ACTIVE';$('#feedLabel').textContent=`Waiting for ESP32 · ${baudRate} baud`;$('#feedAge').textContent='WAITING';
+    setConnection('USB SERIAL · ACTIVE',true);
     port.addEventListener('disconnect',()=>{
       if(state.serialPort!==port)return;state.serialRunning=false;state.connected=false;state.serialPort=null;state.serialReader?.cancel().catch(()=>{});
-      setConnection('USB SERIAL DISCONNECTED',false);$('#feedLabel').textContent='ESP32 USB cable disconnected';
+      setConnection('AUTO MODE',true);startAutomaticFeed();
     },{once:true});
     const reader=port.readable.getReader();state.serialReader=reader;const decoder=new TextDecoder();
     while(state.serialRunning&&state.serialPort===port){
@@ -227,13 +224,30 @@ async function connectSerial(){
       for(const line of lines)consumeSerialLine(line,sourceKey);
       if(state.serialLineBuffer.length>4096)state.serialLineBuffer=state.serialLineBuffer.slice(-1024);
     }
+    if(state.serialPort===port&&state.serialRunning){state.serialRunning=false;state.serialPort=null;state.connected=false;setConnection('AUTO MODE',true);startAutomaticFeed()}
   }catch(error){
-    if(error.name!=='NotFoundError')toast(`USB serial: ${error.message}`);
-    if(state.serialPort){state.connected=false;setConnection('USB SERIAL DISCONNECTED',false);$('#feedLabel').textContent='USB serial disconnected';await stopSerial()}
+    if(error.name!=='NotFoundError')toast(`USB serial: ${/access|denied|busy|open.*serial port/i.test(error.message)?'The selected COM port is busy. Close Arduino Serial Monitor, then connect again.':error.message}`);
+    if(state.serialPort)await stopSerial();
+    startAutomaticFeed();
   }finally{
     if(state.serialReader){try{state.serialReader.releaseLock()}catch{}state.serialReader=null}
     if(state.serialPort&& !state.serialRunning){const port=state.serialPort;state.serialPort=null;try{await port.close()}catch{}}
+    state.serialConnecting=false;
   }
+}
+function sameRememberedPort(port){
+  const config=readConfig(),info=port.getInfo();return config.serialVendorId!=null&&Number(config.serialVendorId)===Number(info.usbVendorId)&&Number(config.serialProductId||0)===Number(info.usbProductId||0);
+}
+async function restoreAuthorizedSerial(){
+  if(!('serial' in navigator)||state.serialPort||state.serialConnecting)return;
+  try{const ports=await navigator.serial.getPorts(),port=ports.find(sameRememberedPort);if(port&&!state.serialPort&&!state.serialConnecting)connectSerial(port)}catch{}
+}
+function watchSerialDevices(){
+  if(!('serial' in navigator))return;
+  navigator.serial.addEventListener('connect',event=>{
+    const port=event.target;if(!['auto','serial'].includes(state.source)||state.serialPort||state.serialConnecting)return;
+    navigator.serial.getPorts().then(ports=>{if(ports.includes(port)&&sameRememberedPort(port))connectSerial(port)}).catch(()=>{});
+  });
 }
 async function connectBluetooth(){
   if(!navigator.bluetooth){toast('Web Bluetooth is not supported in this browser.');return}
@@ -242,35 +256,35 @@ async function connectBluetooth(){
     const device=await navigator.bluetooth.requestDevice({filters:[{services:[serviceUuid]}]});state.bluetoothDevice=device;
     device.addEventListener('gattserverdisconnected',()=>{state.connected=false;setConnection('BLUETOOTH DISCONNECTED',false);$('#feedLabel').textContent='ESP32 disconnected'});
     const server=await device.gatt.connect(),service=await server.getPrimaryService(serviceUuid),characteristic=await service.getCharacteristic(charUuid);await characteristic.startNotifications();
-    const sourceKey=`bluetooth-${device.id||device.name||'esp32'}`;state.historyChannel=sourceKey;state.history=loadHistory(sourceKey);drawHistory();state.connected=true;state.demo=false;$('#historyMode').style.display='none';setConnection('BLUETOOTH · LIVE',true);$('#feedLabel').textContent=device.name||'ESP32 Bluetooth';
+    const sourceKey=`bluetooth-${device.id||device.name||'esp32'}`;state.historyChannel=sourceKey;state.history=loadHistory(sourceKey);drawHistory();state.connected=true;state.autoFeed=false;clearInterval(state.timer);setConnection('BLUETOOTH · ACTIVE',true);$('#feedLabel').textContent=device.name||'ESP32 Bluetooth';
     characteristic.addEventListener('characteristicvaluechanged',event=>{
       const text=new TextDecoder().decode(event.target.value).trim();let payload;
       try{payload=JSON.parse(text)}catch{const values=text.split(',').map(Number);payload=values.length>=8?Object.fromEntries(fields.map((field,index)=>[field.key,values[index]])):{angle:values[0],sunAngle:values[1],voltage:values[2],current:values[3],lux:values[4],temperature:values[5]}}
       try{applyWirelessPayload(payload,sourceKey,'ESP32 Bluetooth')}catch(error){toast(error.message)}
     });
-  }catch(error){state.connected=false;setConnection('BLUETOOTH NOT CONNECTED',false);toast(`Bluetooth: ${error.message}`)}
+  }catch(error){toast(`Bluetooth: ${error.message}`);startAutomaticFeed()}
 }
 function connectThingSpeak(){
-  clearInterval(state.timer);state.source='thingspeak';state.demo=false;state.connected=false;const channel=(readConfig().channelId||'').trim();
+  clearInterval(state.timer);state.source='thingspeak';state.autoFeed=false;state.connected=false;const channel=(readConfig().channelId||'').trim();
   if(!channel){setConnection('CHANNEL ID REQUIRED',false);$('#feedLabel').textContent='Configure your ThingSpeak channel';return}
   if(state.historyChannel!==channel){state.historyChannel=channel;state.history=loadHistory(channel);state.raw={};state.values={};fields.forEach((field,index)=>{$(`#value${index}`).textContent='—';$(`#arc${index}`).style.strokeDasharray='0 100'});drawHistory()}
   pollChannel(state.history.length===0);state.timer=setInterval(()=>pollChannel(false),15000);
 }
 function startSource(source,fromUser=false){
-  clearInterval(state.timer);if(state.bluetoothDevice?.gatt?.connected)state.bluetoothDevice.gatt.disconnect();state.bluetoothDevice=null;if(state.serialPort)stopSerial();state.source=source;state.demo=false;state.connected=false;state.raw={};state.values={};
+  clearInterval(state.timer);if(state.bluetoothDevice?.gatt?.connected)state.bluetoothDevice.gatt.disconnect();state.bluetoothDevice=null;if(state.serialPort)stopSerial();state.source=source;state.autoFeed=false;state.connected=false;state.raw={};state.values={};
   localStorage.setItem('helio-source',source);
-  if(source==='demo'){startDemo();return}
-  if(source==='thingspeak'){connectThingSpeak();return}
+  if(source==='auto'){startAutomaticFeed();restoreAuthorizedSerial();return}
+  if(source==='thingspeak'){if((readConfig().channelId||'').trim())connectThingSpeak();else startAutomaticFeed();return}
   if(source==='wifi'){
-    const config=readConfig(),url=(config.wifiUrl||'').trim();if(!url){setConnection('WIFI URL REQUIRED',false);$('#feedLabel').textContent='Configure your ESP32 endpoint';return}
+    const config=readConfig(),url=(config.wifiUrl||'').trim();if(!url){startAutomaticFeed();return}
     state.historyChannel=`wifi-${url}`;state.history=loadHistory(state.historyChannel);drawHistory();pollWifi();state.timer=setInterval(pollWifi,Math.max(1000,Number(config.pollMs)||3000));return;
   }
   if(source==='bluetooth'){
-    if(!fromUser){setConnection('BLUETOOTH READY TO PAIR',false);$('#feedLabel').textContent='Choose Bluetooth and pair this device';return}
+    if(!fromUser){startAutomaticFeed();return}
     connectBluetooth();return;
   }
   if(source==='serial'){
-    if(!fromUser){setConnection('USB SERIAL READY TO CONNECT',false);$('#feedLabel').textContent='Choose USB serial and select the ESP32 port';return}
+    if(!fromUser){startAutomaticFeed();restoreAuthorizedSerial();return}
     connectSerial();return;
   }
 }
@@ -390,13 +404,12 @@ function updateSun(){
   const hourLabel=`${String(Math.floor(hour)).padStart(2,'0')}:${String(Math.floor((hour%1)*60)).padStart(2,'0')}`;$('#daylightSlider').value=hour;$('#daylightTime').textContent=hourLabel;
   $('#sunElevation').textContent=`${Math.round(THREE.MathUtils.radToDeg(elevation))}° ELEV.`;$('#azimuthReadout').textContent=`${Math.round(THREE.MathUtils.radToDeg(az)+180)}°`;
   $('#sunPosition').textContent=isDay?'DAY ARC':'NIGHT STOW';
-  const solarServo=state.connected&&Number.isFinite(state.values.field3);
-  if(state.tracking&&!solarServo&&!state.demo){state.tilt=state.sunTarget;$('#tiltSlider').value=state.tilt;updateTilt();$('#trackingCaption').textContent='Following moving sun';$('#driveStatus').textContent='SOLAR TRACKING';}
+  const solarServo=(state.connected||state.autoFeed)&&Number.isFinite(state.values.field3);
+  if(state.tracking&&!solarServo){state.tilt=state.sunTarget;$('#tiltSlider').value=state.tilt;updateTilt();$('#trackingCaption').textContent='Following moving sun';$('#driveStatus').textContent='SOLAR TRACKING';}
   updateIncidence();
 }
 function updateSceneReadouts(){
-  if(state.tracking&&state.connected&&Number.isFinite(state.values.field3)){state.tilt=clamp((state.values.field3-90)*.67,-60,60);$('#tiltSlider').value=state.tilt;updateTilt();$('#trackingCaption').textContent='Following servo angle';$('#driveStatus').textContent='SERVO · LIVE';}
-  else if(state.tracking&&state.demo&&Number.isFinite(state.values.field3)){state.tilt=clamp((state.values.field3-90)*.67,-60,60);$('#tiltSlider').value=state.tilt;updateTilt();$('#trackingCaption').textContent='Demo servo angle';$('#driveStatus').textContent='AUTO TRACKING';}
+  if(state.tracking&&(state.connected||state.autoFeed)&&Number.isFinite(state.values.field3)){state.tilt=clamp((state.values.field3-90)*.67,-60,60);$('#tiltSlider').value=state.tilt;updateTilt();$('#trackingCaption').textContent=state.autoFeed?'Auto servo angle':'Following servo angle';$('#driveStatus').textContent=state.autoFeed?'AUTO TRACKING':'SERVO ACTIVE';}
   else if(state.tracking){state.tilt=state.sunTarget;$('#tiltSlider').value=state.tilt;updateTilt();$('#trackingCaption').textContent='Following moving sun';}
 }
 function resize(){const w=sceneHost.clientWidth,h=sceneHost.clientHeight;if(!w||!h)return;camera.aspect=w/h;camera.updateProjectionMatrix();renderer.setSize(w,h,false);labelRenderer.setSize(w,h)}
@@ -412,8 +425,8 @@ $('#daylightSlider').addEventListener('input',event=>{state.sunPlaying=false;sta
 $('#daylightPlay').addEventListener('click',()=>{state.sunPlaying=!state.sunPlaying;$('#daylightPlay').textContent=state.sunPlaying?'Ⅱ':'▶';$('#daylightPlay').title=state.sunPlaying?'Pause daylight cycle':'Resume daylight cycle'});
 $('#labelsButton').addEventListener('click',()=>{state.labels=!state.labels;labelRenderer.domElement.classList.toggle('hidden',!state.labels);$('#labelsButton').classList.toggle('active',state.labels);$('#labelsButton').innerHTML=`LABELS <span>${state.labels?'ON':'OFF'}</span>`});
 $('#resetViewButton').addEventListener('click',()=>{camera.position.set(8.5,6.5,10.5);controls.target.set(0,2,0);controls.update();selectComponent('array')});
-$('#demoButton').addEventListener('click',()=>startSource('demo',true));
-$('#refreshButton').addEventListener('click',()=>{if(state.demo){toast('Demo mode is running');return}pollChannel(state.history.length===0)});
+$('#autoModeButton').addEventListener('click',()=>startSource('auto',true));
+$('#refreshButton').addEventListener('click',()=>{if(state.source==='thingspeak')pollChannel(state.history.length===0);else if(state.source==='wifi')pollWifi();else toast('Telemetry refreshes automatically every 3 seconds')});
 $('#fieldSelect').addEventListener('change',drawHistory);$('#rangeSelect').addEventListener('change',drawHistory);
 window.addEventListener('resize',drawHistory);
 $('#historyCanvas').addEventListener('mousemove',event=>{
@@ -423,8 +436,8 @@ $('#historyCanvas').addEventListener('mousemove',event=>{
 });$('#historyCanvas').addEventListener('mouseleave',()=>$('#historyTooltip').style.display='none');
 function showConnectionFields(){
   const source=$('#sourceSelect').value;
-  for(const [name,id] of [['thingspeak','thingSpeakFields'],['wifi','wifiFields'],['serial','serialFields'],['bluetooth','bluetoothFields'],['demo','demoFields']])$(`#${id}`).classList.toggle('hidden',source!==name);
-  $('#saveConnection').textContent=source==='demo'?'START SIMULATION':'SAVE & CONNECT';
+  for(const [name,id] of [['thingspeak','thingSpeakFields'],['wifi','wifiFields'],['serial','serialFields'],['bluetooth','bluetoothFields']])$(`#${id}`).classList.toggle('hidden',source!==name);
+  $('#saveConnection').textContent=source==='auto'?'START AUTO MODE':'SAVE & CONNECT';
 }
 $('#sourceSelect').addEventListener('change',showConnectionFields);
 $('#settingsButton').addEventListener('click',()=>{
@@ -446,9 +459,9 @@ $('#saveConnection').addEventListener('click',()=>{
 });
 $('#connectionDialog').addEventListener('click',event=>{if(event.target===event.currentTarget)event.currentTarget.close()});
 $('#componentList').addEventListener('click',event=>{const button=event.target.closest('[data-focus]');if(button)selectComponent(button.dataset.focus)});
-window.addEventListener('storage',event=>{if(event.key==='helio-config'||event.key==='helio-source'){state.config=readConfig();const source=localStorage.getItem('helio-source')||'demo';if(source==='bluetooth'){toast('Choose Bluetooth in this tab to pair the device.');return}startSource(source)}});
+window.addEventListener('storage',event=>{if(event.key==='helio-config'||event.key==='helio-source'){state.config=readConfig();const source=localStorage.getItem('helio-source')||'auto';if(source==='bluetooth'){startAutomaticFeed();return}startSource(source)}});
 window.addEventListener('beforeunload',()=>clearInterval(state.timer));
 
-$('#daylightSlider').value=state.sunHour;$('#daylightPlay').textContent='Ⅱ';$('#daylightPlay').title='Pause daylight cycle';drawHistory();$('#sourceSelect').value=state.source;showConnectionFields();
-if(state.source==='thingspeak'&&!state.config.channelId)startDemo();else if(state.source==='bluetooth'){setConnection('BLUETOOTH READY TO PAIR',false);$('#feedLabel').textContent='Choose Bluetooth to pair your device'}else startSource(state.source);
+$('#daylightSlider').value=state.sunHour;$('#daylightPlay').textContent='Ⅱ';$('#daylightPlay').title='Pause daylight cycle';drawHistory();$('#sourceSelect').value=state.source;showConnectionFields();watchSerialDevices();
+if(state.source==='thingspeak'&&!state.config.channelId)startAutomaticFeed();else startSource(state.source);
 selectComponent('array');
