@@ -16,7 +16,7 @@ The panel follows the sun as its position changes. Orbit the camera, adjust pane
 - Eight sensor gauges for both LDRs, servo angle, temperature, three gyroscope axes, and acceleration.
 - Telemetry trend, LDR comparison, and gyroscope charts with local history.
 - USB serial, ThingSpeak, ESP32 Wi-Fi JSON, and Bluetooth LE connections.
-- Automatic tracker feed that refreshes gauges and history every three seconds while no source is connected.
+- Automatic tracker feed that refreshes gauges and history every second while no source is connected.
 
 ## Run on Windows
 
@@ -37,7 +37,7 @@ The 3D scene and fonts load from CDNs, so the browser needs internet access.
 3. Choose **Connect data source → ESP32 USB serial · COM port**.
 4. Keep **115200 baud**, click **Save & Connect**, and choose the ESP32 port (COM7) in the browser prompt.
 
-The dashboard reads the sketch's labeled serial output and updates the gauges and charts as each sensor block arrives. After the one-time browser permission, it reconnects to the selected device when the USB cable is reconnected. If there is no USB connection, **AUTO MODE** keeps the dashboard moving at three-second intervals.
+The dashboard reads the sketch's labeled serial output and updates the gauges and charts as each sensor block arrives. Set `SERIAL_PRINT_INTERVAL_MS` to `1000` in the ESP32 sketch and upload it for one-second USB readings. After the one-time browser permission, it reconnects to the selected device when the USB cable is reconnected. If there is no USB connection, **AUTO MODE** refreshes once per second.
 
 USB serial access requires the browser's permission. The first connection must be selected from the browser's port chooser; afterward the browser can reopen that permitted port.
 

@@ -57,7 +57,7 @@ function startAutomaticFeed(){
   state.source='auto';state.autoFeed=true;state.connected=false;state.tracking=true;state.historyChannel='auto';state.history=loadHistory('auto');state.raw={};state.values={};
   localStorage.setItem('helio-source','auto');$('#sourceSelect').value='auto';$('#sceneMode').textContent='AUTOMATIC TRACKING';$('#trackingToggle').classList.add('on');$('#driveStatus').textContent='AUTO TRACKING';$('#imuStatus').textContent='CALIBRATED';$('#feedLabel').textContent='Automatic mode';$('#feedAge').textContent='AUTO';setConnection('AUTO MODE',true);drawHistory();
   const refresh=()=>{if(state.serialRunning)return;const readings=makeAutomaticReadings();updateGauges(readings);const now=Date.now();mergeHistory([{...readings,entry_id:`auto-${now}`,created_at:new Date(now).toISOString()}])};
-  refresh();state.timer=setInterval(refresh,3000);
+  refresh();state.timer=setInterval(refresh,1000);
 }
 function filteredHistory(){
   const span=Number($('#rangeSelect').value),latest=state.history.at(-1)?.time||Date.now();
@@ -162,7 +162,7 @@ function mapSensorPayload(payload){
 function applyWirelessPayload(payload,sourceKey,label){
   const mapped=mapSensorPayload(payload);if(!Object.keys(mapped).length)throw new Error('The payload did not contain recognized sensor fields.');
   updateGauges(mapped);$('#feedLabel').textContent=label;$('#sceneMode').textContent=label.toUpperCase();setConnection(label.toUpperCase(),true);
-  const now=Date.now();if(now-state.lastWirelessSample>2400){state.lastWirelessSample=now;mergeHistory([{...mapped,entry_id:`${sourceKey}-${now}`,created_at:new Date(now).toISOString()}])}
+  const now=Date.now();if(now-state.lastWirelessSample>900){state.lastWirelessSample=now;mergeHistory([{...mapped,entry_id:`${sourceKey}-${now}`,created_at:new Date(now).toISOString()}])}
 }
 async function pollWifi(){
   const config=readConfig(),endpoint=(config.wifiUrl||'').trim();if(!endpoint){setConnection('WIFI URL REQUIRED',false);$('#feedLabel').textContent='Configure your ESP32 endpoint';return}
@@ -436,7 +436,7 @@ $('#daylightPlay').addEventListener('click',()=>{state.sunPlaying=!state.sunPlay
 $('#labelsButton').addEventListener('click',()=>{state.labels=!state.labels;labelRenderer.domElement.classList.toggle('hidden',!state.labels);$('#labelsButton').classList.toggle('active',state.labels);$('#labelsButton').innerHTML=`LABELS <span>${state.labels?'ON':'OFF'}</span>`});
 $('#resetViewButton').addEventListener('click',()=>{camera.position.set(8.5,6.5,10.5);controls.target.set(0,2,0);controls.update();selectComponent('array')});
 $('#autoModeButton').addEventListener('click',()=>startSource('auto',true));
-$('#refreshButton').addEventListener('click',()=>{if(state.source==='thingspeak')pollChannel(state.history.length===0);else if(state.source==='wifi')pollWifi();else toast('Telemetry refreshes automatically every 3 seconds')});
+$('#refreshButton').addEventListener('click',()=>{if(state.source==='thingspeak')pollChannel(state.history.length===0);else if(state.source==='wifi')pollWifi();else toast('Telemetry refreshes automatically every second')});
 $('#fieldSelect').addEventListener('change',drawHistory);$('#rangeSelect').addEventListener('change',drawHistory);
 window.addEventListener('resize',drawHistory);
 $('#historyCanvas').addEventListener('mousemove',event=>{
